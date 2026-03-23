@@ -6,6 +6,7 @@
 <meta name="description" content="EnergyTrack - Client Billing Manager">
 <title>EnergyTrack — Billing Manager</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 :root {
   --bg:    #0a0c10;
@@ -519,6 +520,12 @@ html,body{height:100%;background:var(--bg);color:var(--t1);font-family:'DM Sans'
 <div class="toast" id="toast"></div>
 
 <script>
+// --- SUPABASE SETUP ---
+const { createClient } = supabase;
+const supabaseUrl = 'https://xucqocxsknoaqmfjtayn.supabase.co';
+const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh1Y3FvY3hza25vYXFtZmp0YXluIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQyNzgxMzEsImV4cCI6MjA4OTg1NDEzMX0.BUxCCmJ0tU_wpJvmc8SbYaI8l2ERmKCEMwCjpuVTG6w';
+const db = createClient(supabaseUrl, supabaseAnonKey);
+
 const defaultStages = [
   {id:'s1',label:'Waiting for Invoice', c:'#a78bfa',b:'rgba(167,139,250,.15)'},
   {id:'s2',label:'Invoice Imported',    c:'#34d399',b:'rgba(52,211,153,.15)'},
@@ -544,26 +551,43 @@ let bulkTab = 'sheet';
 // --- Drag & Drop State ---
 let draggedCardId = null;
 
-/* ── Storage ── */
-function load(){
+/* ── Storage (Using Supabase) ── */
+async function load(){
   try {
-    const r = localStorage.getItem('et_entries_v2'); 
-    if(r) entries = JSON.parse(r); 
-    
-    const s = localStorage.getItem('et_stages_v2');
-    if(s) STAGES = JSON.parse(s);
-    else STAGES = [...defaultStages];
+    const { data, error } = await db.from('app_data').select('*');
+    if (error) throw error;
+
+    let loadedEntries = null;
+    let loadedStages = null;
+
+    if (data) {
+      data.forEach(row => {
+        if (row.key === 'et_entries_v2') loadedEntries = row.value;
+        if (row.key === 'et_stages_v2') loadedStages = row.value;
+      });
+    }
+
+    entries = loadedEntries || {};
+    STAGES = loadedStages || [...defaultStages];
   } catch(e) {
+    console.error("Failed to load data from Supabase:", e);
+    // Fallback to local defaults if DB fails
     entries = {};
     STAGES = [...defaultStages];
   }
 }
-function save(){
+
+async function save(){
   try {
-    localStorage.setItem('et_entries_v2', JSON.stringify(entries)); 
-    localStorage.setItem('et_stages_v2', JSON.stringify(STAGES)); 
+    const { error } = await db.from('app_data').upsert([
+      { key: 'et_entries_v2', value: entries },
+      { key: 'et_stages_v2', value: STAGES }
+    ]);
+    
+    if (error) throw error;
   } catch(e) {
-    console.error("Failed to save data:", e);
+    console.error("Failed to save data to Supabase:", e);
+    toast("Error saving data to cloud!");
   }
 }
 
@@ -828,7 +852,7 @@ function handleDragLeave(e) {
   }
 }
 
-function handleDrop(e, targetStageId) {
+async function handleDrop(e, targetStageId) {
   e.preventDefault();
   const kolBody = e.currentTarget;
   kolBody.classList.remove('drag-over');
@@ -838,7 +862,7 @@ function handleDrop(e, targetStageId) {
   const entry = entries[activeMonthKey].find(x => x.id === draggedCardId);
   if (entry && entry.stage !== targetStageId) {
     entry.stage = targetStageId;
-    save();
+    await save();
     renderDash();
     
     const stageName = STAGES.find(s => s.id === targetStageId)?.label || 'new stage';
@@ -857,7 +881,7 @@ function openStageModal() {
 
 function closeStageModal() { document.getElementById('stageOverlay').classList.remove('open'); }
 
-function saveStage() {
+async function saveStage() {
   const name = document.getElementById('sName').value.trim();
   if(!name) { document.getElementById('sName').style.borderColor='#f87171'; return; }
   
@@ -874,7 +898,7 @@ function saveStage() {
 
   STAGES.push({ id: 's_' + uid(), label: name, c: color, b: bg });
 
-  save();
+  await save();
   closeStageModal();
   renderHome();
   if(document.getElementById('viewDash').classList.contains('active')) renderDash();
@@ -916,7 +940,7 @@ function openSingle(id){
 
 function closeSingle(){ document.getElementById('singleOverlay').classList.remove('open'); editingId=null; }
 
-function saveSingle(){
+async function saveSingle(){
   const name = document.getElementById('fName').value.trim();
   if(!name){ document.getElementById('fName').style.borderColor='#f87171'; return; }
   document.getElementById('fName').style.borderColor='';
@@ -933,21 +957,21 @@ function saveSingle(){
     const idx = entries[activeMonthKey].findIndex(e=>e.id===editingId);
     if(idx>=0) entries[activeMonthKey][idx]=entry;
   } else entries[activeMonthKey].push(entry);
-  save(); closeSingle(); renderDash();
+  await save(); closeSingle(); renderDash();
   toast(editingId?'Client updated':'Client added');
 }
 
-function deleteFromModal() {
+async function deleteFromModal() {
   if(editingId) {
-    deleteEntry(editingId);
+    await deleteEntry(editingId);
     closeSingle();
   }
 }
 
-function deleteEntry(id){
+async function deleteEntry(id){
   if(!confirm('Delete this client?')) return;
   entries[activeMonthKey] = getEntries(activeMonthKey).filter(e=>e.id!==id);
-  save(); renderDash();
+  await save(); renderDash();
   toast('Client removed');
 }
 
@@ -1074,11 +1098,11 @@ function clearBulkPreview(){
   document.getElementById('bulkImportBtn').style.opacity='.4';
 }
 
-function importBulk(){
+async function importBulk(){
   if(!parsedBulk.length) return;
   if(!entries[activeMonthKey]) entries[activeMonthKey]=[];
   entries[activeMonthKey].push(...parsedBulk);
-  save();
+  await save();
   closeBulk();
   renderDash();
   toast(`${parsedBulk.length} client${parsedBulk.length>1?'s':''} imported`);
@@ -1097,8 +1121,10 @@ function toast(msg){
 }
 
 /* ── Init ── */
-load();
-renderHome();
+(async () => {
+  await load();
+  renderHome();
+})();
 
 </script>
 </body>
